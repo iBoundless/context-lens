@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Context Lens</title><link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header><div class="brand"><span>▦</span> Context Lens</div><span class="muted">/ локальный анализатор</span><span id="connection" class="connection">Не подключён</span></header>
+<main>
+<section id="login" class="panel login"><h2>Подключение к сборщику</h2><p class="muted">Введите локальный токен из файла .runtime/token на сервере. Это не API-ключ провайдера.</p><form id="login-form"><input id="token" type="password" autocomplete="off" aria-label="Токен сборщика" required><button class="accent">Подключить</button></form></section>
+<div id="workspace" hidden>
+<div class="toolbar"><button id="opencode" class="active">OpenCode</button><button id="codex">Codex</button><select id="sessions" aria-label="Сессия"></select><span class="spacer"></span><button id="record">Включить запись</button><button id="delete" class="danger">Удалить записи</button></div>
+<h1>Что модель видит на самом деле</h1><p class="muted intro">От первого захваченного запроса до последней волны. Инструкции, инструменты и история - по слоям.</p>
+<div class="stats"><div class="stat"><span class="label">Стартовые слои</span><strong id="startup">?</strong><small>в первом захваченном запросе · оценка</small></div><div class="stat"><span class="label">Первый запрос</span><strong id="first">?</strong><small>включая сообщение пользователя · оценка</small></div><div class="stat"><span class="label">Последний контекст</span><strong id="latest">?</strong><small>видимая часть payload · оценка</small></div><div class="stat"><span class="label">Запросы / попытки</span><strong id="count">0</strong><small id="usage">usage провайдера пока нет</small></div></div>
+<div class="tabs"><button id="start" class="active">Стартовый контекст</button><button id="waves">Волны контекста</button></div>
+<section class="panel"><div class="heading"><h2 id="title">Из чего состоит первый запрос</h2><span class="badge" id="coverage">Нет данных</span></div><div id="wave-controls" hidden></div><div id="empty" class="empty"><span class="empty-symbol">▦</span><h2>Запросы ещё не захвачены</h2><p>Подключите адаптер, выберите сессию и явно включите запись.<br>Прошлую историю мы не выдаём за полный запрос к модели.</p><a href="#setup">Как подключить клиенты ↓</a></div><div class="split" id="visual" hidden><div><div class="cells" id="cells"></div><p class="caption" id="caption"></p><div class="notice" id="warnings" hidden></div></div><div><div id="categories"></div><div class="total"><span>Видимая часть · оценка</span><strong id="total">?</strong></div><div class="caption" id="wave-info"></div></div></div><div id="blocks"></div><details id="raw" hidden><summary>Исходные захваченные данные</summary><pre id="raw-content"></pre></details></section>
+<div class="notice">Оценка: UTF-8 bytes / 4, не точный токенизатор модели. Usage провайдера отображается отдельно. Скрытый серверный контекст недоступен; ссылки на прошлые ответы не означают, что полный контекст известен.</div>
+<details id="setup" class="panel setup"><summary>Подключение и ограничения</summary><p>Сервис доступен только на 127.0.0.1 сервера. Для внешнего браузера используйте SSH-туннель на порт сервиса (по умолчанию 18765).</p><p><b>OpenCode 2.2.5:</b> плагин adapters/opencode. Подключение и передача токена требуют настройки сервиса OpenCode; автоматически настройки не меняются.</p><p><b>Codex API:</b> фиксированный прокси /proxy/codex/responses, SSE и WebSocket. Нужны заголовки thread-id или session-id и X-Context-Lens-Token. Сжатие запросов необходимо выключить.</p><p><b>Codex по подписке:</b> полный захват не подтверждён, режим не объявляется поддержанным.</p><p>Живая проверка клиентов ещё не выполнялась. Сырые тела могут содержать код, личные данные и секреты. Хранение 7 суток, права каталога 0700, файлов 0600. Заголовки авторизации и cookies не записываются. Подробные команды - в README.md проекта.</p></details>
+<footer><span>Локально · без внешней телеметрии · запись только по согласию</span><span>Context Lens / 0.1</span></footer>
+</div>
+<div id="error" role="alert" hidden></div>
+</main>
+<script type="module" src="/assets/app.js"></script>
+</body></html>

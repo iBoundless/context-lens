@@ -1,0 +1,22 @@
+[Unit]
+Description=Context Lens local context collector
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=exec
+WorkingDirectory=/srv/projects/TestALL/context-lens
+ExecStart=/srv/projects/TestALL/context-lens/.venv/bin/python -m context_lens --port 18765 --state /srv/projects/TestALL/context-lens/.runtime
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=context-lens
+
+[Install]
+WantedBy=default.target

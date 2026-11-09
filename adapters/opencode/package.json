@@ -1,0 +1,8 @@
+{
+  "name": "context-lens-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./index.mjs" },
+  "description": "Opt-in local context capture for OpenCode 2.2.5"
+}
