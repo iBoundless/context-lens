@@ -160,6 +160,72 @@ class StoreTests(unittest.TestCase):
         gap = next(w for w in self.store.waves('opencode', 's1') if w['capture'] == 'gap')
         self.assertIsNone(gap['estimated_tokens'])
 
+    def test_skill_totals_cover_all_requests_not_pages_responses_or_gaps(self):
+        self.store.record('opencode', 's1', True)
+        tagged = '<skill_content name="review">abcd</skill_content>'
+        for i in range(105):
+            self.store.ingest(self.event(event_id=f'e{i}', request_id=f'r{i}',
+                kind='title' if i % 2 else 'primary', payload={'instructions': tagged * 2}))
+        self.store.ingest(self.event(event_id='gap', direction='gap', payload={'instructions': tagged}))
+        self.store.ingest(self.event(event_id='reply', direction='response', payload={'instructions': tagged}))
+        info = self.store.overview('opencode', 's1')
+        self.assertIn('skill_totals', info)
+        self.assertEqual(info['skill_totals'], [{'name': 'review', 'kind': 'loaded', 'estimated_tokens': 2730,
+            'occurrences': 210, 'request_count': 105, 'attributions': ['format-heuristic']}])
+        self.assertEqual(info['skill_coverage'], {'request_count': 105, 'gap_count': 1,
+            'incomplete_request_count': 0, 'server_state_unknown_count': 0})
+        self.assertEqual(len(self.store.waves('opencode', 's1')), 100)
+        self.assertEqual(self.store.waves('opencode', 's1')[-1]['skills'], [])
+
+    def test_skills_do_not_cross_sessions_and_are_removed_on_prune_or_delete(self):
+        tagged = {'instructions': '<skill_content name="x">abcd</skill_content>', 'previous_response_id': 'resp-old'}
+        for client, session in [('opencode', 's1'), ('opencode', 's2'), ('codex', 's1')]:
+            self.store.record(client, session, True)
+            self.store.ingest(self.event(event_id=client+session, client=client, session_id=session,
+                payload=tagged, capture='partial'))
+        info = self.store.overview('opencode', 's1')
+        self.assertIn('skill_coverage', info)
+        self.assertEqual(info['skill_coverage']['server_state_unknown_count'], 1)
+        self.assertEqual(info['skill_coverage']['incomplete_request_count'], 1)
+        self.assertEqual(info['skill_totals'][0]['request_count'], 1)
+        self.store.delete_session('opencode', 's1')
+        self.assertEqual(self.store.overview('opencode', 's1')['skill_totals'], [])
+        self.assertEqual(len(self.store.overview('codex', 's1')['skill_totals']), 1)
+        self.store.prune(time.time() + 8 * 86400)
+        self.assertEqual(self.store.overview('codex', 's1')['skill_totals'], [])
+
+    def test_skill_summary_is_not_truncated_with_block_preview(self):
+        self.store.record('opencode', 's1', True)
+        self.store.ingest(self.event(payload={'input': [
+            {'role': 'user', 'content': 'prefix'} for _ in range(501)] + [
+            {'role': 'tool', 'content': '<skill_content name="late">abcd</skill_content>'}]}))
+        wave = self.store.waves('opencode', 's1')[0]
+        self.assertTrue(wave['blocks_truncated'])
+        self.assertEqual(wave.get('skills', [{}])[0].get('name'), 'late')
+
+    def test_reopening_upgrades_old_index_without_losing_usage_consent_or_raw_events(self):
+        self.store.record('opencode', 's1', True)
+        self.store.ingest(self.event(payload={'instructions': '<skill_content name="x">abcd</skill_content>'}))
+        self.store.ingest(self.event(event_id='late', direction='response', payload={'usage': {'input_tokens': 42}}))
+        before = self.store.events('opencode', 's1')
+        row = self.store.db.execute('SELECT seq,summary,analysis FROM wave_index').fetchone()
+        summary, analysis = json.loads(row['summary']), json.loads(row['analysis'])
+        for value in (summary, analysis):
+            value.pop('analysis_version', None)
+            value.pop('skills', None)
+        self.store.db.execute('UPDATE wave_index SET summary=?,analysis=?', (json.dumps(summary), json.dumps(analysis)))
+        self.store.db.commit()
+        self.store.close()
+        self.store = Store(self.path)
+        upgraded = self.store.waves('opencode', 's1')[0]
+        self.assertEqual(upgraded.get('skills', [{}])[0].get('name'), 'x')
+        self.assertEqual(upgraded['usage']['input_tokens'], 42)
+        self.assertEqual(self.store.events('opencode', 's1'), before)
+        self.assertTrue(self.store.is_recording('opencode', 's1'))
+        self.store.close()
+        self.store = Store(self.path)
+        self.assertEqual(self.store.waves('opencode', 's1')[0], upgraded)
+
 
 if __name__ == '__main__':
     unittest.main()

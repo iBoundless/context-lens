@@ -112,6 +112,23 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b'event: changed', update)
         response.close()
 
+    async def test_skill_metadata_is_available_only_through_authenticated_wave_and_overview(self):
+        await self.enable('opencode')
+        event = {'event_id': 'skill', 'session_id': 's1', 'client': 'opencode',
+                 'request_id': 'r1', 'direction': 'request', 'payload': {
+                     'instructions': '<skill_content name="review">abcd</skill_content>'}}
+        await self.client.post('/api/events', json=event, headers=self.auth)
+        url = '/api/overview?client=opencode&session_id=s1'
+        self.assertEqual((await self.client.get(url)).status, 401)
+        info = await (await self.client.get(url, headers=self.auth)).json()
+        self.assertEqual(info.get('skill_totals', [{}])[0].get('request_count'), 1)
+        waves = await (await self.client.get('/api/waves?client=opencode&session_id=s1', headers=self.auth)).json()
+        wave_url = '/api/wave/' + str(waves[0]['id'])
+        self.assertEqual((await self.client.get(wave_url)).status, 401)
+        full = await (await self.client.get(wave_url, headers=self.auth)).json()
+        self.assertEqual(full['skills'][0]['name'], 'review')
+        self.assertEqual(full['skills'], waves[0]['skills'])
+
     async def test_proxy_forwards_bytes_without_recording_by_default(self):
         body = b'{"model":"fixture","input":"hi","stream":true}'
         headers = self.auth | {'Authorization': 'Bearer UPSTREAM_SECRET',

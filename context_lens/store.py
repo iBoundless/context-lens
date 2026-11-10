@@ -8,7 +8,7 @@ import threading
 from functools import wraps
 from pathlib import Path
 
-from .analysis import analyze, usage_from
+from .analysis import ANALYSIS_VERSION, analyze, usage_from
 
 CLIENTS = {'opencode', 'codex'}
 DIRECTIONS = {'request', 'response', 'gap', 'notice'}
@@ -67,12 +67,20 @@ class Store:
               summary TEXT NOT NULL, analysis TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS wave_session ON wave_index(client,session_id,seq);
         ''')
-        # One-time indexing of captures written before the materialized index existed.
-        missing = self.db.execute('SELECT e.* FROM events e LEFT JOIN wave_index w ON e.seq=w.seq '
-                                  'WHERE w.seq IS NULL AND e.direction IN ("request","gap") ORDER BY e.seq')
-        for row in missing.fetchall():
-            self._index_request(dict(row), json.loads(row['data']))
-        self.db.commit()
+        # Derived analysis is replaceable; raw captures and recording consent are not.
+        with self.db:
+            stale = self.db.execute('SELECT e.*,w.summary AS old_summary FROM events e '
+                                    'LEFT JOIN wave_index w ON e.seq=w.seq '
+                                    'WHERE e.direction IN ("request","gap") AND '
+                                    '(w.seq IS NULL OR COALESCE(json_extract(w.summary,"$.analysis_version"),0) != ?) '
+                                    'ORDER BY e.seq', (ANALYSIS_VERSION,))
+            for row in stale:
+                old = json.loads(row['old_summary']) if row['old_summary'] else {}
+                self._index_request(dict(row), json.loads(row['data']))
+                if old.get('usage') and old.get('capture') != 'gap':
+                    current = self.db.execute('SELECT summary FROM wave_index WHERE seq=?', (row['seq'],)).fetchone()
+                    usage = old['usage'] | (json.loads(current[0]).get('usage') or {})
+                    self._update_usage(row['client'], row['session_id'], row['request_id'], usage)
 
     @locked
     def close(self):
@@ -124,6 +132,7 @@ class Store:
     def _index_request(self, row, data):
         analysis = analyze(data.get('payload'))
         if data['direction'] == 'gap':
+            analysis['skills'] = []
             analysis['estimated_tokens'] = None
             analysis['context_completeness'] = 'capture-gap'
             analysis['warnings'].append('capture-gap')
@@ -198,8 +207,33 @@ class Store:
         latest = json.loads(last_row[0]) if last_row else None
         usage = self.db.execute('SELECT SUM(input_tokens),COUNT(input_tokens),COUNT(*) FROM wave_index '
                                 'WHERE client=? AND session_id=?', (client, session)).fetchone()
+        skill_totals, coverage = {}, {'request_count': 0, 'gap_count': 0,
+                                     'incomplete_request_count': 0, 'server_state_unknown_count': 0}
+        # Read compact metadata only, independent of wave/block preview limits.
+        rows = self.db.execute('SELECT json_extract(summary,"$.skills"), '
+                               'json_extract(summary,"$.capture"), json_extract(summary,"$.context_completeness") '
+                               'FROM wave_index WHERE client=? AND session_id=?', (client, session))
+        for skills, capture, completeness in rows:
+            if capture == 'gap':
+                coverage['gap_count'] += 1
+                continue
+            coverage['request_count'] += 1
+            coverage['incomplete_request_count'] += int(capture != 'complete' or completeness == 'unknown-protocol')
+            coverage['server_state_unknown_count'] += int(completeness == 'server-state-unknown')
+            for skill in json.loads(skills or '[]'):
+                key = (skill['name'], skill['kind'])
+                entry = skill_totals.setdefault(key, {'name': key[0], 'kind': key[1], 'estimated_tokens': 0,
+                    'request_count': 0, 'occurrences': 0, 'attributions': set()})
+                count = skill['estimated_tokens']
+                entry['estimated_tokens'] = (None if count is None or entry['estimated_tokens'] is None
+                                             else entry['estimated_tokens'] + count)
+                entry['request_count'] += 1
+                entry['occurrences'] += skill['occurrences']
+                entry['attributions'].update(skill['attributions'])
         return {'first': first, 'latest': latest, 'provider_input_sum': usage[0] or 0,
-                'usage_reported_count': usage[1], 'total': usage[2]}
+                'usage_reported_count': usage[1], 'total': usage[2], 'skill_coverage': coverage,
+                'skill_totals': [entry | {'attributions': sorted(entry['attributions'])}
+                                 for _, entry in sorted(skill_totals.items())]}
 
     @locked
     def detail(self, seq):
