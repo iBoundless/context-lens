@@ -4,6 +4,11 @@ import hashlib
 import json
 import math
 
+from .skills import segment_skill_text, summarize_skills, valid_name
+
+
+ANALYSIS_VERSION = 2
+
 
 def text(value):
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(',', ':'))
@@ -31,15 +36,40 @@ def multimodal(value, content=False):
 def analyze(payload):
     blocks, warnings = [], []
 
-    def add(category, source, value, attribution='protocol'):
-        content = text(value)
+    def add(category, source, value, attribution='protocol', *, scan=False):
         unknown_tokens = multimodal(value)
         if unknown_tokens and 'multimodal-tokens-unknown' not in warnings:
             warnings.append('multimodal-tokens-unknown')
-        blocks.append({'id': hashlib.sha256((source + content).encode()).hexdigest()[:20],
-                       'category': category, 'source': source, 'content': content,
-                       'attribution': attribution,
-                       'estimated_tokens': None if unknown_tokens else math.ceil(len(content.encode()) / 4)})
+        explicit = source[6:] if category == 'skills' and source.startswith('skill:') else None
+        if valid_name(explicit):
+            segments = [{'content': text(value), 'skill_name': explicit, 'skill_kind': 'loaded',
+                         'attribution': attribution}]
+        elif scan:
+            segments = text_segments(value)
+        else:
+            segments = [{'content': text(value)}]
+        # Keep the exact serialized envelope in ordinary blocks. Skill spans alone
+        # have known text size even when another field contains an attachment.
+        pending = ''
+        merged = []
+        for part in segments:
+            if 'skill_name' in part:
+                if pending:
+                    merged.append({'content': pending})
+                    pending = ''
+                merged.append(part)
+            else:
+                pending += part['content']
+        if pending or not merged:
+            merged.append({'content': pending})
+        for i, part in enumerate(merged):
+            content = part['content']
+            skill = 'skill_name' in part
+            block_source = source if len(merged) == 1 else f'{source}/part[{i}]'
+            blocks.append({'id': hashlib.sha256((block_source + content).encode()).hexdigest()[:20],
+                           'category': 'skills' if skill else category, 'source': block_source,
+                           'attribution': part.get('attribution', attribution), **part,
+                           'estimated_tokens': None if unknown_tokens and not skill else math.ceil(len(content.encode()) / 4)})
 
     completeness = 'client-payload'
     if not isinstance(payload, dict):
@@ -62,11 +92,11 @@ def analyze(payload):
                                 name = source['key']
                                 category = ('memory' if 'AGENTS.md' in name or name.startswith('memory:')
                                             else 'skills' if name.startswith('skill:') else 'harness')
-                                add(category, name, source['text'], 'source-metadata')
+                                add(category, name, source['text'], 'source-metadata', scan=category != 'skills')
                         else:
-                            add('harness', f'{key}[{i}]', part)
+                            add('harness', f'{key}[{i}]', part, scan=True)
                 else:
-                    add('harness', key, parts)
+                    add('harness', key, parts, scan=True)
         tools = payload.get('tools', [])
         if isinstance(tools, dict):
             tools = [{'name': k, **v} if isinstance(v, dict) else {'name': k, 'schema': v}
@@ -83,7 +113,7 @@ def analyze(payload):
         for key in ['messages', 'input']:
             messages = payload.get(key, [])
             if isinstance(messages, str):
-                add('user', key, messages)
+                add('user', key, messages, scan=True)
                 continue
             if not isinstance(messages, list):
                 if messages:
@@ -102,16 +132,51 @@ def analyze(payload):
                     category = 'tool'
                 elif kind in {'function_call', 'custom_tool_call', 'reasoning'}:
                     category = 'assistant'
-                add(category, f'{key}[{i}]/{role or kind or "unknown"}', message)
+                add(category, f'{key}[{i}]/{role or kind or "unknown"}', message, scan=True)
         if not blocks:
             add('unknown', 'payload', payload)
             completeness = 'unknown-protocol'
     if completeness == 'unknown-protocol':
         warnings.append('unknown-protocol')
     counts = [b['estimated_tokens'] for b in blocks]
-    return {'blocks': blocks, 'estimated_tokens': None if None in counts else sum(counts),
+    return {'blocks': blocks, 'skills': summarize_skills(blocks), 'analysis_version': ANALYSIS_VERSION,
+            'estimated_tokens': None if None in counts else sum(counts),
             'estimate_method': 'utf8-bytes/4', 'context_completeness': completeness,
             'warnings': warnings}
+
+
+def text_segments(value):
+    """Scan only protocol text fields; JSON fragments reassemble the original value."""
+    def walk(node, allowed=True):
+        if not allowed:
+            return [{'content': json.dumps(node, ensure_ascii=False, separators=(',', ':'))}]
+        if isinstance(node, str):
+            parts = segment_skill_text(node)
+            return [{'content': '"'},
+                    *[part | {'content': json.dumps(part['content'], ensure_ascii=False)[1:-1]} for part in parts],
+                    {'content': '"'}]
+        if isinstance(node, list):
+            output = [{'content': '['}]
+            for i, child in enumerate(node):
+                if i:
+                    output.append({'content': ','})
+                output.extend(walk(child, allowed))
+            return output + [{'content': ']'}]
+        if isinstance(node, dict):
+            output = [{'content': '{'}]
+            for i, (key, child) in enumerate(node.items()):
+                if i:
+                    output.append({'content': ','})
+                output.append({'content': json.dumps(key, ensure_ascii=False) + ':'})
+                is_text = key in {'content', 'output'} or (key == 'text' and node.get('type') in {'text', 'input_text', 'output_text'})
+                output.extend(walk(child, is_text))
+            return output + [{'content': '}'}]
+        return [{'content': text(node)}]
+
+    if isinstance(value, str):
+        return segment_skill_text(value)
+    # Root objects can be text content parts or messages. Metadata is never scanned.
+    return walk(value)
 
 
 def response_objects(value):
