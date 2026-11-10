@@ -91,3 +91,12 @@ Spec coverage: per-wave and whole-session data, source/format priority, loaded/c
 - Tasks 1-3 implemented with RED/GREEN tests. Before final review: Python44/44, JavaScript16/16, JavaScript syntax check and git diff whitespace check passed.
 - Browser smoke on isolated synthetic collector at port18769: login; two-session isolation; selected-wave switching; live auxiliary request increments accumulated tokens/count; separate loaded/catalog entries; unknown server-state notice; hostile name rendered as text, no img element. Expected initial401 before login was the only console error.
 - Working systemd collector, live captures and remote main remain untouched by feature development.
+- Independent whole-branch review found one Important startup issue for malformed content types. Added list/dict analyzer and legacy-index upgrade regressions, observed RED, applied type guard, verified GREEN: Python46/46, JavaScript16/16. No other reviewer findings or deferred minors.
+
+## Delivery Status
+
+- [x] Task1: disjoint analyzer attribution, tests and commit.
+- [x] Task2: versioned old-index upgrade and whole-session totals, tests and commit.
+- [x] Task3: table, documentation, automated checks and isolated browser smoke.
+- [x] Task4: privacy audit, independent review, regression fix and final local verification.
+- Integration, push and live deployment require a separate user decision. No live database migration or restart was performed.

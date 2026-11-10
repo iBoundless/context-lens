@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -225,6 +226,31 @@ class StoreTests(unittest.TestCase):
         self.store.close()
         self.store = Store(self.path)
         self.assertEqual(self.store.waves('opencode', 's1')[0], upgraded)
+
+    def test_old_index_with_unhashable_content_types_does_not_prevent_startup(self):
+        self.store.record('opencode', 's1', True)
+        self.store.ingest(self.event())
+        self.store.ingest(self.event(event_id='dict', request_id='r2'))
+        self.store.ingest(self.event(event_id='usage', direction='response', payload={'usage': {'input_tokens': 42}}))
+        self.store.close()
+        with sqlite3.connect(self.path) as db:
+            for seq, raw in db.execute('SELECT seq,data FROM events WHERE direction="request"').fetchall():
+                event = json.loads(raw)
+                event['payload'] = {'input': [{'role': 'user', 'content': [{
+                    'type': [] if seq == 1 else {}, 'text': 'ordinary text'}]}]}
+                db.execute('UPDATE events SET data=? WHERE seq=?', (json.dumps(event), seq))
+            db.execute('UPDATE wave_index SET summary=json_remove(summary,"$.analysis_version","$.skills"), '
+                       'analysis=json_remove(analysis,"$.analysis_version","$.skills")')
+            before = db.execute('SELECT data FROM events ORDER BY seq').fetchall()
+        self.store = Store(self.path)
+        for wave in self.store.waves('opencode', 's1'):
+            self.assertEqual(wave['skills'], [])
+            self.assertIsNone(wave['estimated_tokens'])
+            self.assertIn('multimodal-tokens-unknown', wave['warnings'])
+        self.assertEqual(self.store.overview('opencode', 's1')['provider_input_sum'], 42)
+        self.assertTrue(self.store.is_recording('opencode', 's1'))
+        self.assertEqual([row[0] for row in self.store.db.execute('SELECT data FROM events ORDER BY seq')],
+                         [row[0] for row in before])
 
 
 if __name__ == '__main__':

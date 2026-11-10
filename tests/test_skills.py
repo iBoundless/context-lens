@@ -78,3 +78,14 @@ class SkillAnalysisTests(unittest.TestCase):
         result, skills = self.skills({'system': [{'type': 'text', 'text': loaded('actual'), 'metadata': {
             'experimental': {'instructions': [{'key': 'skill:stale', 'text': 'not actual'}]}}}]})
         self.assertEqual([s['name'] for s in skills], ['actual'])
+
+    def test_unhashable_content_types_remain_unknown_and_unattributed(self):
+        for kind in ([], {}):
+            with self.subTest(kind=kind):
+                message = {'role': 'user', 'content': [{'type': kind, 'text': loaded()}]}
+                result = analyze({'input': [message]})
+                self.assertEqual(result['skills'], [])
+                self.assertIsNone(result['estimated_tokens'])
+                self.assertIn('multimodal-tokens-unknown', result['warnings'])
+                self.assertEqual(''.join(b['content'] for b in result['blocks']),
+                                 json.dumps(message, ensure_ascii=False, separators=(',', ':')))

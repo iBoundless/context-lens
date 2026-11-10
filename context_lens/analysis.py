@@ -164,11 +164,13 @@ def text_segments(value):
             return output + [{'content': ']'}]
         if isinstance(node, dict):
             output = [{'content': '{'}]
+            kind = node.get('type')
+            text_part = isinstance(kind, str) and kind in {'text', 'input_text', 'output_text'}
             for i, (key, child) in enumerate(node.items()):
                 if i:
                     output.append({'content': ','})
                 output.append({'content': json.dumps(key, ensure_ascii=False) + ':'})
-                is_text = key in {'content', 'output'} or (key == 'text' and node.get('type') in {'text', 'input_text', 'output_text'})
+                is_text = key in {'content', 'output'} or (key == 'text' and text_part)
                 output.extend(walk(child, is_text))
             return output + [{'content': '}'}]
         return [{'content': text(node)}]
