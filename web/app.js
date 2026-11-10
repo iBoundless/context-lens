@@ -1,4 +1,4 @@
-import { summarize, compareBlocks, tileCounts } from '/assets/view-model.mjs';
+import { summarize, compareBlocks, tileCounts, skillRows } from '/assets/view-model.mjs';
 
 const $ = id => document.getElementById(id);
 const fmt = n => n === null || n === undefined ? '?' : n.toLocaleString('ru-RU');
@@ -6,7 +6,7 @@ const layers = {
   harness: ['Харнес', '#969e90', 'Системные инструкции и окружение'],
   builtin: ['Инструменты', '#379ce9', 'Определения функций и встроенных инструментов'],
   mcp: ['MCP-инструменты', '#a18bf0', 'По имени инструмента, эвристическая атрибуция'],
-  skills: ['Навыки', '#ed743d', 'Только при доступной атрибуции источника'],
+  skills: ['Навыки', '#ed743d', 'По меткам источника или стандартным тегам, включая описания'],
   memory: ['AGENTS.md и память', '#23ab7d', 'Только при доступной атрибуции источника'],
   user: ['Пользователь', '#d5ab29', 'Сообщения и вложения'],
   assistant: ['Ассистент', '#5eaaad', 'Ответы, рассуждения и вызовы инструментов'],
@@ -16,6 +16,7 @@ const layers = {
 let client = 'opencode', sessionId = '', sessions = [], waves = [], view = 'start';
 let waveId = null, selectedCategory = null, source = null, revision = 0, pending = false;
 let overview = null, paging = false;
+let sessionEpoch = 0;
 const fullWaves = new Map(), loadingWaves = new Set();
 
 function el(tag, className, text) {
@@ -41,13 +42,21 @@ async function api(path, options = {}) {
 
 function query() { return new URLSearchParams({ client, session_id: sessionId }); }
 
+function resetSessionView() {
+  sessionEpoch++;
+  waveId = null; selectedCategory = null; overview = null; waves = [];
+  fullWaves.clear(); loadingWaves.clear(); paging = false;
+}
+
 async function refresh() {
   const myRevision = ++revision;
   const list = await api('/api/sessions');
   if (myRevision !== revision) return;
   sessions = list;
   const available = list.filter(s => s.client === client);
-  if (!available.some(s => s.session_id === sessionId)) { sessionId = available[0]?.session_id ?? ''; waveId = null; }
+  if (!available.some(s => s.session_id === sessionId)) {
+    sessionId = available[0]?.session_id ?? ''; resetSessionView();
+  }
   const select = $('sessions'); select.replaceChildren();
   if (!available.length) select.append(new Option('Нет обнаруженных сессий', ''));
   available.forEach(s => select.append(new Option(s.session_id + (s.recording ? ' · запись' : ' · пауза'), s.session_id)));
@@ -106,17 +115,20 @@ function render() {
   $('blocks').replaceChildren(); $('cells').replaceChildren(); $('categories').replaceChildren();
   $('raw').hidden = !current; $('raw').open = false; $('raw-content').textContent = '';
   if (view === 'waves') renderWaves();
-  if (!current) { $('coverage').textContent = 'Нет данных'; return; }
+   if (!current) { $('coverage').textContent = 'Нет данных'; renderSkills(null); return; }
   const saved = fullWaves.get(current.id);
   if (saved) current = { ...saved, ...current, blocks: saved.blocks };
   else if (!loadingWaves.has(current.id)) {
-    const id = current.id; loadingWaves.add(id);
+    const id = current.id, epoch = sessionEpoch; loadingWaves.add(id);
     api('/api/wave/' + id).then(full => {
+      if (epoch !== sessionEpoch) return;
       fullWaves.set(id, full);
       while (fullWaves.size > 4) fullWaves.delete(fullWaves.keys().next().value);
       render();
-    }).catch(e => error(e.message)).finally(() => loadingWaves.delete(id));
+    }).catch(e => { if (epoch === sessionEpoch) error(e.message); })
+      .finally(() => { if (epoch === sessionEpoch) loadingWaves.delete(id); });
   }
+  renderSkills(current);
   const index = waves.findIndex(w => w.id === current.id);
   $('title').textContent = view === 'start' ? 'Из чего состоит первый захваченный запрос' : 'Запрос ' + current.id + ' / состав контекста';
   const incomplete = current.capture !== 'complete';
@@ -172,6 +184,36 @@ function render() {
   };
 }
 
+function renderSkills(current) {
+  const container = $('skills'); container.replaceChildren();
+  const rows = skillRows(current, overview);
+  const coverage = overview?.skill_coverage;
+  $('skill-coverage').textContent = coverage
+    ? 'Сохранённых запросов: ' + fmt(coverage.request_count) + ' · gap: ' + fmt(coverage.gap_count)
+      + ' · неполных: ' + fmt(coverage.incomplete_request_count)
+      + ' · с неизвестным серверным состоянием: ' + fmt(coverage.server_state_unknown_count)
+    : 'Статистика сессии ещё не загружена';
+  if (!rows.length) {
+    container.append(el('p', 'caption', 'Скиллы не распознаны в сохранённых данных. Это не означает нулевой расход.'));
+    return;
+  }
+  const table = el('table', 'block-table skill-table'), head = el('thead'), heading = el('tr');
+  ['Скилл / источник', 'Тип текста', '≈ В запросе', 'Доля запроса', '≈ За сессию', 'Запросов'].forEach(label => heading.append(el('th', '', label)));
+  head.append(heading); table.append(head);
+  const body = el('tbody');
+  rows.forEach(skill => {
+    const row = el('tr'), name = el('td', '', skill.name);
+    name.append(el('div', 'caption', skill.attributions.map(value => value === 'source-metadata'
+      ? 'метка источника' : value === 'format-heuristic' ? 'по формату (эвристика)' : value).join(' · ')));
+    row.append(name, el('td', '', skill.kind === 'loaded' ? 'Полный текст' : 'Описание'),
+      el('td', 'num', skill.selected_present ? fmt(skill.selected_tokens) : 'нет в захвате'),
+      el('td', 'num', skill.percent === null ? '?' : skill.percent.toFixed(1) + '%'),
+      el('td', 'num', fmt(skill.session_tokens)), el('td', 'num', fmt(skill.request_count)));
+    body.append(row);
+  });
+  table.append(body); container.append(table);
+}
+
 function renderWaves() {
   const container = $('wave-controls'); container.replaceChildren();
   const strip = el('div', 'strip');
@@ -191,14 +233,16 @@ function renderWaves() {
   const older = el('button', '', 'Более ранние');
   older.disabled = paging || waves.length < 100;
   older.onclick = async () => {
+    const epoch = sessionEpoch;
     paging = true; older.disabled = true;
     try {
-      const previousPage = await api('/api/waves?' + query() + '&before=' + waves[0].id);
+       const previousPage = await api('/api/waves?' + query() + '&before=' + waves[0].id);
+       if (epoch !== sessionEpoch) return;
       waves = [...previousPage, ...waves].slice(0, 200);
       if (previousPage.length) waveId = previousPage.at(-1).id;
       else older.textContent = 'Начало истории';
-    } catch (e) { error(e.message); }
-    finally { paging = false; render(); }
+    } catch (e) { if (epoch === sessionEpoch) error(e.message); }
+    finally { if (epoch === sessionEpoch) { paging = false; render(); } }
   };
   const previous = el('button', '', '←'); previous.setAttribute('aria-label', 'Предыдущая волна');
   const next = el('button', '', '→'); next.setAttribute('aria-label', 'Следующая волна');
@@ -228,11 +272,11 @@ function renderBlocks(blocks) {
 }
 
 for (const name of ['opencode', 'codex']) $(name).onclick = () => {
-  client = name; sessionId = ''; waveId = null; selectedCategory = null;
+  client = name; sessionId = ''; resetSessionView(); render();
   $('opencode').classList.toggle('active', name === 'opencode'); $('codex').classList.toggle('active', name === 'codex');
   refresh().catch(e => error(e.message));
 };
-$('sessions').onchange = () => { sessionId = $('sessions').value; waveId = null; selectedCategory = null; refresh().catch(e => error(e.message)); };
+$('sessions').onchange = () => { sessionId = $('sessions').value; resetSessionView(); render(); refresh().catch(e => error(e.message)); };
 for (const name of ['start', 'waves']) $(name).onclick = () => {
   view = name; selectedCategory = null;
   $('start').classList.toggle('active', view === 'start'); $('waves').classList.toggle('active', view === 'waves'); render();

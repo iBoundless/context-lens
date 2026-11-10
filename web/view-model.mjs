@@ -40,3 +40,21 @@ export function tileCounts(blocks) {
   const unit = Math.max(100, Math.ceil(total / Math.max(1, 1600 - groups.size) / 100) * 100);
   return { unit, unknown, tiles: [...groups].map(([category, tokens]) => ({ category, count: Math.ceil(tokens / unit) })) };
 }
+
+export function skillRows(current, overview) {
+  const key = skill => JSON.stringify([skill.name, skill.kind]);
+  const selected = new Map((current?.skills ?? []).map(skill => [key(skill), skill]));
+  const totals = new Map((overview?.skill_totals ?? []).map(skill => [key(skill), skill]));
+  return [...new Set([...selected.keys(), ...totals.keys()])].map(id => {
+    const skill = selected.get(id), total = totals.get(id), identity = skill ?? total;
+    const count = skill?.estimated_tokens ?? null;
+    return {
+      name: identity.name, kind: identity.kind,
+      selected_tokens: count, selected_present: Boolean(skill),
+      percent: count === null || !current?.estimated_tokens ? null : 100 * count / current.estimated_tokens,
+      session_tokens: total?.estimated_tokens ?? null, request_count: total?.request_count ?? null,
+      attributions: [...new Set([...(skill?.attributions ?? []), ...(total?.attributions ?? [])])].sort(),
+    };
+  }).sort((a, b) => (b.session_tokens ?? -1) - (a.session_tokens ?? -1)
+    || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind));
+}

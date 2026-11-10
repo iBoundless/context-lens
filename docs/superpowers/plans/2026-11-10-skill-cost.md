@@ -85,3 +85,9 @@
 ## Self-Review
 
 Spec coverage: per-wave and whole-session data, source/format priority, loaded/catalog separation, no double count, migration, retained-window scope, incomplete coverage and documentation each have an owning task. The five Review Focus cases are assigned to Tasks 1-3. Interface names are shared consistently; no new endpoint or dependency is required.
+
+## Execution Evidence
+
+- Tasks 1-3 implemented with RED/GREEN tests. Before final review: Python44/44, JavaScript16/16, JavaScript syntax check and git diff whitespace check passed.
+- Browser smoke on isolated synthetic collector at port18769: login; two-session isolation; selected-wave switching; live auxiliary request increments accumulated tokens/count; separate loaded/catalog entries; unknown server-state notice; hostile name rendered as text, no img element. Expected initial401 before login was the only console error.
+- Working systemd collector, live captures and remote main remain untouched by feature development.
